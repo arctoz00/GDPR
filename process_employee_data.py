@@ -1,5 +1,4 @@
 import warnings
-# Undertryk advarsler om dato-parsning og downcasting
 warnings.filterwarnings("ignore", message="Parsing dates in %Y-%m-%d %H:%M:%S format when dayfirst=True was specified.")
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -77,24 +76,9 @@ def january_like_week(d):
     else:
         return 5
 
-# -----------------------------------------------------------
-# EKSTRA FUNKTION: parse_punch_report
-# Hvis kolonnerne hedder fx "punch date", "punch time", "directionality" = In/Out,
-# laver vi en kombineret datetime + retning, så vi kan parre dem.
-# -----------------------------------------------------------
+
 def parse_punch_report(df):
-    """
-    Eksempel: df indeholder:
-      - 'punch date' (dd-mm-yyyy),
-      - 'punch time' (HH:MM:SS),
-      - 'directionality' (In/Out).
-    Vi laver 'parsed_datetime' = kombination af date og time,
-    og bevarer 'directionality'. Returnerer en ny DataFrame
-    med kolonner [parsed_date, parsed_time, directionality, parsed_datetime].
-    """
-    # parse date
     s_no, s_yes = parse_date_both_ways(df["punch date"])
-    # find dominerende month
     y_no, m_no = pick_dominant_month(s_no, s_no)
     y_yes, m_yes = pick_dominant_month(s_yes, s_yes)
     count_no = ((s_no.dt.year == y_no) & (s_no.dt.month == m_no)).sum()
@@ -106,9 +90,8 @@ def parse_punch_report(df):
         df["parsed_date"] = s_no.dt.date
         best_year, best_month = y_no, m_no
 
-    # parse time
+    
     df["parsed_time"] = df["punch time"].apply(parse_time)
-    # combine
     def combine_dt(row):
         if pd.isna(row["parsed_date"]) or pd.isna(row["parsed_time"]):
             return None
@@ -116,27 +99,18 @@ def parse_punch_report(df):
     df["parsed_datetime"] = df.apply(combine_dt, axis=1)
     df.dropna(subset=["parsed_datetime"], inplace=True)
 
-    # behold kun rækker i den dominerende (year, month)
+  
     df = df[df["parsed_datetime"].apply(lambda d: d.year==best_year and d.month==best_month)]
 
     return df, best_year, best_month
 
 def calc_daily_work_multi_in_out(group):
-    """
-    Eksempel: group indeholder flere In/Out-registreringer i kronologisk rækkefølge.
-    1. Sortér efter parsed_datetime
-    2. Par In -> Out for at beregne intervaller
-    3. Summér net arbejdstid + pauser
-    daily hours = sum(Out - In)
-    resting hours = sum(In_{i+1} - Out_i)
-    """
     group = group.sort_values("parsed_datetime")
-    # filter kun "In" og "Out"
     times = []
     for _, row in group.iterrows():
         times.append((row["parsed_datetime"], row["directionality"]))
 
-    # Gå igennem times i rækkefølge, par In -> Out
+    
     total_work = 0.0
     total_break = 0.0
     last_out = None
@@ -144,10 +118,7 @@ def calc_daily_work_multi_in_out(group):
     for i in range(len(times)):
         dt, direct = times[i]
         if direct.lower() == "in":
-            # husk, at sidste out for i-1
-            # kan give en pause, hvis last_out er sat
             if last_out is not None:
-                # break = dt - last_out
                 diff = (dt - last_out).total_seconds()/3600
                 if diff>0:
                     total_break += diff
@@ -159,9 +130,7 @@ def calc_daily_work_multi_in_out(group):
                     total_work += diff
             last_out = dt
 
-    # first_in = earliest In
-    # last_out = latest Out
-    # find earliest "in"
+
     all_in = [t[0] for t in times if t[1].lower()=="in"]
     all_out= [t[0] for t in times if t[1].lower()=="out"]
     if len(all_in)>0:
@@ -173,7 +142,7 @@ def calc_daily_work_multi_in_out(group):
     else:
         final_out = group["parsed_datetime"].iloc[-1]
 
-    # uge
+
     wn = january_like_week(first_in.date())
     return pd.Series({
         "daily hours": total_work,
@@ -199,17 +168,10 @@ def main():
         print("[ERROR] Could not load the file:", e)
         return
 
-    # Tjek om vi har kolonner som "punch date", "punch time", "directionality"
-    # Hvis ja, parse med parse_punch_report
-    # Ellers brug det gamle flow
-    # (Her antager vi at kolonnerne hedder "punch date", "punch time", "directionality")
+   
     col_lower = [c.lower().strip() for c in df.columns]
     if "punch date" in col_lower and "punch time" in col_lower and "directionality" in col_lower:
-        # parse punch style
         print("[INFO] Det ligner en Punch-format rapport. Parser derefter.")
-        # parse
-        # find de faktiske kolonnenavne
-        # for robusthed
         punch_date_col = [c for c in df.columns if c.lower().strip()=="punch date"][0]
         punch_time_col = [c for c in df.columns if c.lower().strip()=="punch time"][0]
         direction_col  = [c for c in df.columns if c.lower().strip()=="directionality"][0]
@@ -221,9 +183,6 @@ def main():
         }, inplace=True)
 
         df, best_year, best_month = parse_punch_report(df)
-        # for rummelighed: antag at "employee id" og "employee name" stadig findes
-        # group by employee + date => calc_daily_work_multi_in_out
-        # men først filtrer for den valgte employee
         employee_id = simpledialog.askstring("Employee ID", "Enter the Employee ID to extract data for:")
         if not employee_id:
             print("[ERROR] No Employee ID entered. Exiting.")
@@ -235,25 +194,19 @@ def main():
             print(f"[WARNING] No data found for Employee ID '{employee_id}'. Exiting.")
             return
 
-        # sorter
+      
         df["parsed_datetime"] = pd.to_datetime(df["parsed_datetime"], errors="coerce")
         df = df.sort_values("parsed_datetime")
 
-        # group => calc
+        
         grouped = df.groupby(["employee id", df["parsed_datetime"].dt.date]).apply(calc_daily_work_multi_in_out).reset_index()
-        # => har daily hours, resting hours, week number, clock_in_dt, clock_out_dt
-        # alt efter behov, gem i output
-
-        # ... her kan du merge med en fuld date-range, lave weekly summary osv.
-        # For at holde det "ikke ændre eksisterende kode", du kan integrere denne df i dit gamle flow.
+        
 
         print("[INFO] Punch-format parse complete. daily hours + resting hours computed for multiple In/Out.")
         return
     else:
         print("[INFO] Kører gammelt flow, fordi vi ikke fandt 'punch date/punch time/directionality' kolonner.")
-        # ... Kald din gamle "klassiske" parse-linje her ...
-        # (Resten af koden fra dit oprindelige script)
-        # ...
+      
 
 if __name__=="__main__":
     main()
